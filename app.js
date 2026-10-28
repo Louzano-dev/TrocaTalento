@@ -28,6 +28,10 @@
   }
   let state = loadState();
   let modalReturnFocus = null;
+  let scrollRevealObserver = null;
+  let scrollProgressFrame = 0;
+  let creditAnimationFrame = 0;
+  let highlightedCreditMovementId = null;
   function saveState() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { toast('Não foi possível salvar os dados neste navegador.', 'error'); } }
   function esc(value) { return String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
   function slug(value) { return value.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
@@ -48,6 +52,79 @@
   function avatar(initials, color='avatar-maya') { return `<span class="avatar ${color}" aria-hidden="true">${esc(initials)}</span>`; }
   function skillTags(items, cls='') { return items.map(item=>`<span class="skill-tag ${cls}">${esc(item)}</span>`).join(''); }
 
+  function observeScrollReveals(root=document) {
+    if(!scrollRevealObserver)return;
+    const targets=$$('.section-heading,.step-card,.talent-card,.match-demo,.credit-visual,.stat-card,.dashboard-panel,.dashboard-side .side-card,.final-inner',root);
+    targets.forEach((element,index)=>{
+      if(element.classList.contains('scroll-reveal'))return;
+      element.classList.add('scroll-reveal');
+      element.style.setProperty('--reveal-delay',`${(index%3)*65}ms`);
+      scrollRevealObserver.observe(element);
+    });
+  }
+
+  function sessionTimelineMarkup(status) {
+    const stage=status==='completed'?'completed':status==='confirmed'?'confirmed':'scheduled';
+    const activeIndex={requested:0,scheduled:1,confirmed:2,completed:3}[stage];
+    const stages=['Solicitada','Agendada','Confirmada','Concluída'];
+    return `<ol class="session-timeline stage-${stage}" aria-label="Etapas da troca">${stages.map((label,index)=>`<li class="${index<activeIndex?'is-done':''} ${index===activeIndex?'is-current':''}" ${index===activeIndex?'aria-current="step"':''}><span class="timeline-marker" aria-hidden="true">${index<activeIndex?'✓':index+1}</span><span class="timeline-label">${label}</span></li>`).join('')}</ol>`;
+  }
+
+  function animateCreditBalance(from,to) {
+    const balance=$('#credit-balance');
+    const balanceText=balance.firstChild;
+    const card=$('.balance-card');
+    if(!balanceText)return;
+    if(creditAnimationFrame)cancelAnimationFrame(creditAnimationFrame);
+    card.classList.remove('credit-updated');
+    if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+      balanceText.nodeValue=`${to.toFixed(1).replace('.',',')} `;
+      return;
+    }
+    const start=performance.now(),duration=680;
+    const animate=now=>{
+      const progress=Math.min(1,(now-start)/duration);
+      const eased=1-Math.pow(1-progress,3);
+      const amount=from+(to-from)*eased;
+      balanceText.nodeValue=`${amount.toFixed(1).replace('.',',')} `;
+      if(progress<1){creditAnimationFrame=requestAnimationFrame(animate);return;}
+      balanceText.nodeValue=`${to.toFixed(1).replace('.',',')} `;
+      creditAnimationFrame=0;
+    };
+    balanceText.nodeValue=`${from.toFixed(1).replace('.',',')} `;
+    creditAnimationFrame=requestAnimationFrame(animate);
+    requestAnimationFrame(()=>card.classList.add('credit-updated'));
+    setTimeout(()=>card.classList.remove('credit-updated'),1100);
+  }
+
+  function initScrollEffects() {
+    const progress=$('#scroll-progress');
+    const updateProgress=()=>{
+      if(scrollProgressFrame)return;
+      scrollProgressFrame=requestAnimationFrame(()=>{
+        const root=document.documentElement;
+        const range=root.scrollHeight-window.innerHeight;
+        const amount=range>0?Math.min(1,Math.max(0,window.scrollY/range)):0;
+        progress.style.transform=`scaleX(${amount})`;
+        scrollProgressFrame=0;
+      });
+    };
+    window.addEventListener('scroll',updateProgress,{passive:true});
+    window.addEventListener('resize',updateProgress,{passive:true});
+    updateProgress();
+
+    if(window.matchMedia('(prefers-reduced-motion: reduce)').matches||!('IntersectionObserver' in window))return;
+    document.documentElement.classList.add('has-scroll-reveal');
+    scrollRevealObserver=new IntersectionObserver(entries=>{
+      entries.forEach(entry=>{
+        if(!entry.isIntersecting)return;
+        entry.target.classList.add('is-visible');
+        scrollRevealObserver.unobserve(entry.target);
+      });
+    },{threshold:.12,rootMargin:'0px 0px -36px 0px'});
+    observeScrollReveals();
+  }
+
   function renderProfiles() {
     const query=slug($('#search-input').value), category=$('#category-filter').value, wanted=$('#offer-filter').value, modality=$('#modality-filter').value, sort=$('#sort-filter').value;
     let visible=profiles.filter(p=>{
@@ -63,6 +140,7 @@
     }).join('');
     $('#empty-state').classList.toggle('hidden',visible.length!==0);
     $('#talent-grid').classList.toggle('hidden',visible.length===0);
+    observeScrollReveals($('#talent-grid'));
   }
 
   function renderDashboard() {
@@ -71,8 +149,9 @@
     $('#average-rating').innerHTML=`${state.avg.toFixed(1).replace('.',',')} <small>/ 5</small>`;
     const sessions=$('#sessions-list');
     const upcoming=state.sessions.filter(s=>s.status==='confirmed'||s.status==='pending');
-    sessions.innerHTML=upcoming.length?upcoming.map(s=>`<div class="activity-row">${avatar(s.initials,s.color)}<div class="activity-details"><b>${esc(s.skill)} · ${esc(s.name)}</b><small>${formatDate(s.date)} · ${esc(s.time)} · ${s.duration} min · ${esc(s.modality)}</small></div><span class="status-pill ${s.status==='confirmed'?'status-confirmed':'status-pending'}">${s.status==='confirmed'?'Confirmada':'A combinar'}</span><div class="activity-actions">${s.status==='pending'?`<button data-action="confirm-session" data-id="${esc(s.id)}" aria-label="Confirmar sessão com ${esc(s.name)}">Confirmar</button>`:''}<button data-action="complete-session" data-id="${esc(s.id)}" aria-label="Concluir sessão com ${esc(s.name)}">Concluir</button><button data-action="cancel-session" data-id="${esc(s.id)}" aria-label="Cancelar sessão com ${esc(s.name)}">Cancelar</button></div></div>`).join(''):`<div class="dashboard-empty">Nenhuma sessão próxima. Que tal propor uma troca?</div>`;
-    $('#credit-history').innerHTML=state.history.length?state.history.slice(0,6).map(h=>`<div class="history-row"><span class="history-symbol ${h.kind==='debit'?'debit':''}">${h.kind==='debit'?'↗':'↙'}</span><span class="history-description">${esc(h.title)}<small>${formatDate(h.date)}</small></span><span class="history-amount ${h.kind==='debit'?'debit':''}">${esc(h.amount)} cr</span></div>`).join(''):`<div class="dashboard-empty">Suas movimentações aparecerão aqui.</div>`;
+    sessions.innerHTML=upcoming.length?upcoming.map(s=>`<div class="activity-row session-row">${avatar(s.initials,s.color)}<div class="activity-details"><b>${esc(s.skill)} · ${esc(s.name)}</b><small>${formatDate(s.date)} · ${esc(s.time)} · ${s.duration} min · ${esc(s.modality)}</small></div><span class="status-pill ${s.status==='confirmed'?'status-confirmed':'status-pending'}">${s.status==='confirmed'?'Confirmada':'A combinar'}</span><div class="activity-actions">${s.status==='pending'?`<button data-action="confirm-session" data-id="${esc(s.id)}" aria-label="Confirmar sessão com ${esc(s.name)}">Confirmar</button>`:''}<button data-action="complete-session" data-id="${esc(s.id)}" aria-label="Concluir sessão com ${esc(s.name)}">Concluir</button><button data-action="cancel-session" data-id="${esc(s.id)}" aria-label="Cancelar sessão com ${esc(s.name)}">Cancelar</button></div>${sessionTimelineMarkup(s.status==='pending'?'scheduled':s.status)}</div>`).join(''):`<div class="dashboard-empty">Nenhuma sessão próxima. Que tal propor uma troca?</div>`;
+    $('#credit-history').innerHTML=state.history.length?state.history.slice(0,6).map(h=>`<div class="history-row ${h.id===highlightedCreditMovementId?'history-new-credit':''}"><span class="history-symbol ${h.kind==='debit'?'debit':''}">${h.kind==='debit'?'↗':'↙'}</span><span class="history-description">${esc(h.title)}<small>${formatDate(h.date)}</small></span><span class="history-amount ${h.kind==='debit'?'debit':''}">${esc(h.amount)} cr</span></div>`).join(''):`<div class="dashboard-empty">Suas movimentações aparecerão aqui.</div>`;
+    highlightedCreditMovementId=null;
     const pending=state.requests.filter(r=>r.status==='pending');
     $('#request-count').textContent=`${pending.length} ${pending.length===1?'pendente':'pendentes'}`;
     $('#requests-list').innerHTML=pending.length?pending.map(r=>`<div class="request-row">${avatar(r.initials,r.color)}<div class="activity-details"><b>${esc(r.name)}</b><small>${esc(r.learn)} · ${r.duration} min</small></div><button class="clear-button" data-action="schedule-request" data-id="${esc(r.id)}" aria-label="Agendar sessão com ${esc(r.name)}">Agendar</button><button class="clear-button" data-action="cancel-request" data-id="${esc(r.id)}" aria-label="Cancelar solicitação para ${esc(r.name)}">Cancelar</button></div>`).join(''):`<div class="request-empty">Sem solicitações pendentes. Encontre alguém para começar.</div>`;
@@ -92,9 +171,15 @@
   function profileMarkup(p) {
     const m=compatibility(p);
     const rating=profileRating(p);const comments=state.ratings.filter(r=>r.profileId===p.id&&r.comment);
-    return `<div class="modal-kicker">PERFIL DEMONSTRATIVO</div><div class="profile-modal-head">${avatar(p.initials,p.colors)}<div><h2 id="modal-title">${esc(p.name)}</h2><p>${esc(p.role)} · ${esc(p.location)}</p></div></div><p class="profile-bio">${esc(p.bio)}</p><div class="profile-detail-grid"><div class="detail-box"><b>Ensina</b><p>${p.offers.map(esc).join('<br>')}</p></div><div class="detail-box"><b>Quer aprender</b><p>${p.wants.map(esc).join('<br>')}</p></div><div class="detail-box"><b>Sobre as sessões</b><p>${esc(p.level)}<br>${esc(p.availability)}</p></div><div class="detail-box"><b>Comunidade</b><p>★ ${rating.rating.toFixed(1)} em ${rating.reviews} avaliações<br>${p.trades} trocas concluídas</p></div></div>${comments.map(r=>`<p class="profile-bio"><b>★ ${r.score}/5</b> ${esc(r.comment)}</p>`).join('')}<div class="compatibility-box"><div class="compatibility-top"><b>Compatibilidade com você</b><b>${m.score}%</b></div><div class="compatibility-meter"><span style="width:${m.score}%"></span></div><p>${esc(m.explanation)}</p></div><button class="button button-full" data-action="request" data-id="${p.id}">Solicitar uma troca <span>↗</span></button>`;
+    const matchConnections=[...m.iTeach.map(skill=>`<div class="match-connection"><span>Você ensina</span><b>${esc(skill)}</b><span>${esc(p.name.split(' ')[0])} quer aprender</span></div>`),...m.iLearn.map(skill=>`<div class="match-connection"><span>${esc(p.name.split(' ')[0])} ensina</span><b>${esc(skill)}</b><span>Você quer aprender</span></div>`)].join('');
+    return `<div class="modal-kicker">PERFIL DEMONSTRATIVO</div><div class="profile-modal-head">${avatar(p.initials,p.colors)}<div><h2 id="modal-title">${esc(p.name)}</h2><p>${esc(p.role)} · ${esc(p.location)}</p></div></div><p class="profile-bio">${esc(p.bio)}</p><div class="profile-detail-grid"><div class="detail-box"><b>Ensina</b><p>${p.offers.map(esc).join('<br>')}</p></div><div class="detail-box"><b>Quer aprender</b><p>${p.wants.map(esc).join('<br>')}</p></div><div class="detail-box"><b>Sobre as sessões</b><p>${esc(p.level)}<br>${esc(p.availability)}</p></div><div class="detail-box"><b>Comunidade</b><p>★ ${rating.rating.toFixed(1)} em ${rating.reviews} avaliações<br>${p.trades} trocas concluídas</p></div></div>${comments.map(r=>`<p class="profile-bio"><b>★ ${r.score}/5</b> ${esc(r.comment)}</p>`).join('')}<div class="compatibility-box profile-compatibility"><div class="compatibility-top"><b>Compatibilidade com você</b><b>${m.score}%</b></div><div class="compatibility-meter" role="progressbar" aria-label="Compatibilidade com ${esc(p.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${m.score}"><span style="--match-width:${m.score}%"></span></div>${matchConnections}<p>${esc(m.explanation)}</p></div><button class="button button-full" data-action="request" data-id="${p.id}">Solicitar uma troca <span>↗</span></button>`;
   }
-  function openProfile(profile) { openModal(profileMarkup(profile),true); }
+  function openProfile(profile) {
+    openModal(profileMarkup(profile),true);
+    const reveal=()=>$('.profile-compatibility')?.classList.add('is-revealed');
+    if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)reveal();
+    else requestAnimationFrame(reveal);
+  }
   function openRequest(profile) {
     const learnOptions=profile.offers.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
     const teachOptions=currentUser.offers.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
@@ -129,9 +214,11 @@
   });
   function completeSession(session){
     if(session.status==='completed'||session.creditDone){toast('Esta sessão já foi concluída.','error');return;}
+    const balanceBefore=state.balance;
     session.status='completed';session.creditDone=true;state.completed+=1;const amount=session.duration/60;state.balance=Math.round((state.balance+amount)*2)/2;
-    state.history.unshift({id:`movement-${Date.now()}`,title:`${session.skill} · ${session.name}`,date:new Date().toISOString().slice(0,10),amount:`+${amount.toFixed(1).replace('.',',')}`,kind:'credit'});saveState();renderDashboard();
-    openModal(`<div class="modal-kicker">CONHECIMENTO COMPARTILHADO</div><h2 id="modal-title">Sessão concluída!</h2><p class="modal-intro">Sua sessão com ${esc(session.name)} foi registrada. Seu saldo agora é ${state.balance.toFixed(1).replace('.',',')} créditos demonstrativos.</p><div class="compatibility-box"><div class="compatibility-top"><b>Como foi aprender com ${esc(session.name.split(' ')[0])}?</b><b aria-hidden="true">★</b></div><div class="rating-picker" id="rating-picker" role="group" aria-label="Escolha uma nota de 1 a 5">${[1,2,3,4,5].map(n=>`<button type="button" data-rating="${n}" aria-label="Nota ${n}" aria-pressed="false">★</button>`).join('')}</div><label class="field-label" for="rating-comment">Comentário opcional</label><textarea id="rating-comment" maxlength="240" class="request-form" style="width:100%;height:70px;padding:9px;border:1px solid #e7e7ef;border-radius:8px;resize:vertical" placeholder="Compartilhe como foi a experiência"></textarea></div><button class="button button-full" id="submit-rating" data-session="${esc(session.id)}">Salvar avaliação <span aria-hidden="true">↗</span></button><button class="button button-outline button-full" id="skip-rating">Agora não</button>`);
+    const movement={id:`movement-${Date.now()}`,title:`${session.skill} · ${session.name}`,date:new Date().toISOString().slice(0,10),amount:`+${amount.toFixed(1).replace('.',',')}`,kind:'credit'};
+    state.history.unshift(movement);highlightedCreditMovementId=movement.id;saveState();renderDashboard();animateCreditBalance(balanceBefore,state.balance);
+    openModal(`<div class="modal-kicker">CONHECIMENTO COMPARTILHADO</div><h2 id="modal-title">Sessão concluída!</h2><p class="modal-intro">Sua sessão com ${esc(session.name)} foi registrada. Seu saldo agora é ${state.balance.toFixed(1).replace('.',',')} créditos demonstrativos.</p>${sessionTimelineMarkup('completed')}<div class="compatibility-box"><div class="compatibility-top"><b>Como foi aprender com ${esc(session.name.split(' ')[0])}?</b><b aria-hidden="true">★</b></div><div class="rating-picker" id="rating-picker" role="group" aria-label="Escolha uma nota de 1 a 5">${[1,2,3,4,5].map(n=>`<button type="button" data-rating="${n}" aria-label="Nota ${n}" aria-pressed="false">★</button>`).join('')}</div><label class="field-label" for="rating-comment">Comentário opcional</label><textarea id="rating-comment" maxlength="240" class="request-form" style="width:100%;height:70px;padding:9px;border:1px solid #e7e7ef;border-radius:8px;resize:vertical" placeholder="Compartilhe como foi a experiência"></textarea></div><button class="button button-full" id="submit-rating" data-session="${esc(session.id)}">Salvar avaliação <span aria-hidden="true">↗</span></button><button class="button button-outline button-full" id="skip-rating">Agora não</button>`);
     let selected=0;$('#rating-picker').addEventListener('click',e=>{const b=e.target.closest('[data-rating]');if(!b)return;selected=Number(b.dataset.rating);$$('[data-rating]',$('#rating-picker')).forEach(x=>{const active=Number(x.dataset.rating)<=selected;x.classList.toggle('selected',active);x.setAttribute('aria-pressed',String(Number(x.dataset.rating)===selected));});});
     $('#submit-rating').addEventListener('click',()=>{if(!selected){toast('Escolha uma nota de 1 a 5.','error');return;}if(state.ratings.some(r=>r.sessionId===session.id)){toast('Você já avaliou esta sessão.','error');closeModal();return;}const comment=$('#rating-comment').value.trim();state.ratings.push({sessionId:session.id,profileId:session.profileId||null,score:selected,comment,date:new Date().toISOString().slice(0,10)});saveState();renderDashboard();renderProfiles();closeModal();toast('Avaliação registrada. Obrigado por compartilhar!','success');});
     $('#skip-rating').addEventListener('click',closeModal);
@@ -161,4 +248,5 @@
   $('#main-nav').addEventListener('click',e=>{if(e.target.closest('a')){$('#main-nav').classList.remove('open');$('#menu-toggle').setAttribute('aria-expanded','false');}});
   $('#reset-demo').addEventListener('click',()=>{if(!confirm('Reiniciar os dados demonstrativos? Suas solicitações, sessões, avaliações e saldo local voltarão ao início.'))return;state=defaultState();saveState();renderDashboard();renderProfiles();toast('Demonstração reiniciada.','success');});
   renderProfiles();renderDashboard();
+  initScrollEffects();
 })();
