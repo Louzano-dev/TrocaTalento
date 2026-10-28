@@ -123,4 +123,6 @@ small{font-size:var(--font-caption)}
 .profile-compatibility .match-connection span{color:#55596b}
 .rating-picker button{color:#625b70}
 .rating-picker button.selected{color:#754800}
+.filter-panel select,.search-box input,.request-form input,.request-form select,.request-form textarea{color:#55596b}
+.search-box input::placeholder,.request-form input::placeholder,.request-form textarea::placeholder{color:#62667c;opacity:1}
 @media(prefers-contrast:more){.text-link,.clear-button,.footer-links a{color:#20243b}.button-outline,.button-light{border-color:#5142b8}}
