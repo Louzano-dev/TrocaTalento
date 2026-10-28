@@ -113,3 +113,14 @@ small{font-size:var(--font-caption)}
 /* Alinha os terminais das linhas aos centros dos avatares em cada altura do hero */
 .art-person.person-left{top:calc(33% - 19.5px)}.art-person.person-right{bottom:calc(31% - 19.5px)}
 @media(max-width:680px){.art-person.person-left{top:calc(33% - 16.5px)}.art-person.person-right{bottom:calc(31% - 16.5px)}}
+/* Correções adicionais de contraste para texto e controles visíveis. */
+.brand-light,.step-number,.art-center small,.request-person small{color:#55596b}
+.brand-mark span{color:#fff}
+.purple{color:#5142b8}
+.note-arrow,.demo-disclaimer>span{color:#5142b8}
+.center-spark{color:#854a29}
+.final-inner p{color:#e4e3ed}
+.profile-compatibility .match-connection span{color:#55596b}
+.rating-picker button{color:#625b70}
+.rating-picker button.selected{color:#754800}
+@media(prefers-contrast:more){.text-link,.clear-button,.footer-links a{color:#20243b}.button-outline,.button-light{border-color:#5142b8}}
